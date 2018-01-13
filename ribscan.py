@@ -14,7 +14,7 @@ import sys
 import datetime
 import os.path
 
-from subprocess import run
+from subprocess import run, PIPE
 from configparser import ConfigParser
 
 from PyQt5 import QtCore
@@ -58,7 +58,7 @@ class WorkerTask(QtCore.QThread):
     progress cannot be measured. This means these operations will have to run in their own QThread.
     Signals must be defined as class variables.
     """
-    taskFinished = QtCore.pyqtSignal()
+    taskFinished = QtCore.pyqtSignal(int, str, str)
     cmd_list = list()
 
     def set_cmd_list(self, items):
@@ -68,11 +68,11 @@ class WorkerTask(QtCore.QThread):
 
     def run(self):
         if sys.platform == "win32":
-            run([self.cmd_list[0], self.cmd_list[1], self.cmd_list[2]], shell=True)
+            cp = run([self.cmd_list[0], self.cmd_list[1], self.cmd_list[2]], stdout=PIPE, stderr=PIPE, shell=True)
         else:
-            run([self.cmd_list[0], self.cmd_list[1], self.cmd_list[2]])
+            cp = run([self.cmd_list[0], self.cmd_list[1], self.cmd_list[2]], stdout=PIPE, stderr=PIPE)
 
-        self.taskFinished.emit()
+        self.taskFinished.emit(cp.returncode, cp.stdout.decode('UTF-8'), cp.stderr.decode('UTF-8'))
 
 class RibscanApp(QtWidgets.QMainWindow, Ui_MainWindow):
     """
@@ -177,10 +177,20 @@ class RibscanApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.statusBar().showMessage("Creating " + self.pdf_filename)
         self.scantask.start()
     
-    def finished_scan_task(self):
+    def finished_scan_task(self, retint, outstr, errstr):
         self.progressBarScan.setRange(1, 1) # Stop progressbar pulse
         self.statusBar().clearMessage() # Clear the statusbar
-        self.thunderbird_compose_with_attachment(self.pdf_filename) # Email attachment
+
+        # NAPS2 logs errors to stdout only, 1 per line.  Return code is always zero.
+        if errstr or retint:
+            pass
+        if outstr:
+            for errormsg in outstr.splitlines():
+                if errormsg:
+                    QMessageBox.critical(self, 'Scanning Error', errormsg)
+            self.finished_email_task()
+        else:
+            self.thunderbird_compose_with_attachment(self.pdf_filename) # Email attachment
 
     def thunderbird_compose_with_attachment(self, pdfname):
         cmd = (self.config['DEFAULT']['path_thunderbird_command'], '-compose', "attachment='" + pdfname + "'")
